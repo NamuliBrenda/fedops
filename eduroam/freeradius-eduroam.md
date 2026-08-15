@@ -153,18 +153,18 @@ Before configuring eduroam, verify that the FreeRADIUS server can successfully a
 
 Add a test user to the users file. Replace the example realm with your group's realm.
 ```bash
-sudo sed -i 'testuser@renu.ac.ug   Cleartext-Password := "Test1234"' /etc/freeradius/mods-config/files/authorize
+sudo sed -i '1i testuser@devops.renu.ac.ug Cleartext-Password := "Test1234"' /etc/freeradius/mods-config/files/authorize
 ```
 
 > Cleartext is used here only so every EAP method works in the lab. In production
-> you would authenticate against LDAP/AD or SQL instead — see the
+> you would authenticate against LDAP/AD or SQL instead - see the
 > "Protocol & Password Compatibility" slide for why the storage format matters.
 
 ### 2.2 Set the default EAP type
 
 FreeRADIUS ships with self-signed **test certificates**, which are all we need for
 Lab 1. But on this package the default outer EAP type is **`md5`**, which will not
-work for eduroam — we need **PEAP**. Check what is currently set:
+work for eduroam - we need **PEAP**. Check what is currently set:
 
 ```bash
 grep -n "default_eap_type" /etc/freeradius/mods-enabled/eap
@@ -191,7 +191,7 @@ eap {
 }
 ```
 
-Leave the `default_eap_type = mschapv2` **inside** the `peap { }` block unchanged —
+Leave the `default_eap_type = mschapv2` **inside** the `peap { }` block unchanged -
 that correctly selects MSCHAPv2 as the method carried inside the PEAP tunnel.
 
 > The bundled certs are for labs only. Real eduroam requires a proper server
@@ -274,8 +274,8 @@ Copy the provided `eduroam-inner-tunnel` configuration into the file, then save 
 Create symbolic links from `sites-available` to `sites-enabled` to enable both virtual servers:
 
 ```bash
-sudo ln -s /etc/freeradius/3.0/sites-available/eduroam /etc/freeradius/3.0/sites-enabled/eduroam 
-sudo ln -s /etc/freeradius/3.0/sites-available/eduroam-inner-tunnel  /etc/freeradius/3.0/sites-enabled/eduroam-inner-tunnel
+sudo ln -s /etc/freeradius/sites-available/eduroam /etc/freeradius/sites-enabled/eduroam 
+sudo ln -s /etc/freeradius/sites-available/eduroam-inner-tunnel  /etc/freeradius/sites-enabled/eduroam-inner-tunnel
 ```
 
 ### 3.2 Configure `proxy.conf`
@@ -361,9 +361,26 @@ Save the changes and exit the file:
 ```bash
 sudo nano /etc/freeradius/certs/client.cnf
 ```
+Locate the following lines:
+```
+countryName             = FR
+stateOrProvinceName     = Radius
+localityName            = Somewhere
+organizationName        = Example Inc.
+emailAddress            = admin@example.org
+commonName              = admin@example.org
+```
+Update these values with the details of the institution your group is using for the lab.
 
-Locate the corresponding certificate information and update it with the details of your institution, 
-following the same approach used for `ca.cnf`.
+For example:
+```
+countryName             = UG
+stateOrProvinceName     = Kampala
+localityName            = Kololo
+organizationName        = RENU
+emailAddress            = bnamuli@renu.ac.ug
+commonName              = bnamuli@renu.ac.ug
+```
 
 Save the changes and exit the file.
 
@@ -431,6 +448,7 @@ sudo chown -R freerad:freerad /etc/freeradius/
 Navigate to the FreeRADIUS certificate directory:
 ```bash
 cd /etc/freeradius/certs/
+```
 
 Generate the certificates:
 ```bash
@@ -501,9 +519,8 @@ base_dn = "dc=gtp,dc=renu,dc=ac,dc=ug"
 ```
 ### 4.3 Configure the LDAP User Filter 
 In the `user` section of the LDAP configuration, configure FreeRADIUS to search for users using either the `uid` or `cn` attribute:
-```
-user { base_dn = "${..base_dn}" 
-filter = "(|(uid=%{%{Stripped-User-Name}:-%{User-Name}})(cn=%{%{Stripped-User-Name}:-%{User-Name}}))" }
+```bash
+sudo sed -i '/^[[:space:]]*#filter = "(uid=/c\                filter = "(|(uid=%{%{Stripped-User-Name}:-%{User-Name}})(cn=%{%{Stripped-User-Name}:-%{User-Name}}))"' /etc/freeradius/mods-available/eap
 ```
 This allows FreeRADIUS to locate an LDAP user whose username is stored in either the `uid` or `cn` attribute.
 
@@ -515,10 +532,12 @@ For example, a username of bnamuli results in a search equivalent to:
 ### 4.4 Test the LDAP Connection 
 Before testing authentication through FreeRADIUS, verify that the LDAP server can be queried using the configured bind account:
 ```bash
-ldapsearch -x \ -H ldap://ldap.example.org \ 
--D "cn=admin,dc=example,dc=org" \ 
--W \ -b "dc=example,dc=org" \ 
-'(|(uid=testuser)(cn=testuser))'
+ldapsearch -x \
+  -H ldap://ldap.example.org \
+  -D "cn=admin,dc=example,dc=org" \
+  -W \
+  -b "dc=example,dc=org" \
+  '(|(uid=testuser)(cn=testuser))'
 ```
 If this command fails to work install the ldap-utils then rerun the command 
 ```bash
@@ -642,3 +661,46 @@ SUCCESS
 The FreeRADIUS debug output should show the EAP-TTLS tunnel being established, the inner authentication request being processed, and an Access-Accept returned to the client.
 
 **Checkpoint**: Ensure that EAP-TTLS authentication is successful before proceeding to federation testing.
+
+### 5.7 Configure the Federation Test
+On your RADIUS server, create a copy of the EAP-TTLS test configuration used in Part 5: 
+cd ~/radius-debug
+cp ttls-pap.conf federation-test.conf 
+
+Open the new configuration
+```bash
+sudo nano federation-test.conf
+```
+
+Configure the test using a valid user belonging to **another group (Institution)**
+For example :
+```
+network={ 
+  ssid="eduroam" 
+  key_mgmt=WPA-EAP eap=TTLS 
+  identity="user2@example.org" 
+  anonymous_identity="anonymous@example.org" 
+  password="USER_PASSWORD" 
+  phase2="auth=PAP" 
+}
+```
+Replace the example realm, username, and password with the information provided by the other group. 
+
+**Important**: The realm must be included in the `anonymous identity`. The federation uses the realm in the outer identity to route the
+authentication request towards the user's home institution. 
+
+### 5.8 Start FreeRADIUS in Debug Mode
+On your RADIUS server, start FreeRADIUS in debug mode: 
+```bash
+sudo freeradius -X
+```
+Leave the terminal running so that you can deserve how the request is processed. 
+
+The group operation the other RADIUS server should also monitor the FreeRADIUS debug output on their server. 
+```bash
+sudo freeradius -X
+```
+You should also run the same test on the other group's RADIUS server. A successful authentication should return an `Access-Accept` for
+both tests.
+
+**Final Checkpoint**: Federation authentication should work successfully in both directions before the lab is considered complete.
